@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# 本地测试产物
+*.local.pdf
+tmp/
+out/
+
+# vim 交换文件
+*.swp
+*.swo
+*.swn
