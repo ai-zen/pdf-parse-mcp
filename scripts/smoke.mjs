@@ -65,6 +65,45 @@ assert.equal(content.images.length, 1, `应有 1 张位图，实际 ${content.im
 assert.deepEqual(content.images[0].bbox, [400, 132, 550, 232], `位图外框错误: ${JSON.stringify(content.images[0].bbox)}`);
 assert.equal(content.images[0].intrinsicWidth, 2);
 
+// ---------- region：只取一块（过滤，不裁剪几何）----------
+const clipped = await extractPage(page, { precision: 3, region: [150, 100, 260, 200] });
+assert.ok(
+  clipped.shapes.length > 0 && clipped.shapes.length < content.shapes.length,
+  `region 应只保留一部分图形，实际 ${clipped.shapes.length}/${content.shapes.length}`,
+);
+for (const s of clipped.shapes) {
+  const [x0, y0, x1, y1] = s.bbox;
+  assert.ok(x1 >= 150 && y1 >= 100 && x0 <= 260 && y0 <= 200, `region 内的图形应与 region 相交，实际 ${JSON.stringify(s.bbox)}`);
+}
+assert.equal(clipped.images.length, 0, `region 外的位图应被丢掉，实际 ${clipped.images.length}`);
+assert.ok(
+  clipped.shapes.some((s) => JSON.stringify(s.bbox) === "[170,142,230,172]"),
+  "region 只过滤不裁剪：几何坐标应与整页抽取时一致",
+);
+
+// ---------- applyClip：只丢「外框与裁剪区完全不相交」的元素 ----------
+const clipPage = await openPage("tmp/sample-clip.pdf", 1);
+const clipPlain = await extractPage(clipPage, { precision: 3 });
+const clipApplied = await extractPage(clipPage, { precision: 3, applyClip: true });
+assert.deepEqual(
+  clipPlain.shapes.map((s) => s.bbox),
+  [
+    [240, 152, 280, 192],
+    [10, 722, 70, 782],
+    [100, 592, 200, 692],
+  ],
+  `sample-clip 应有三个填充矩形（裁剪区默认不返回），实际 ${JSON.stringify(clipPlain.shapes.map((s) => s.bbox))}`,
+);
+assert.deepEqual(
+  clipApplied.shapes.map((s) => s.bbox),
+  [
+    [10, 722, 70, 782],
+    [100, 592, 200, 692],
+  ],
+  `applyClip 应只丢掉完全在裁剪区外的那块，实际 ${JSON.stringify(clipApplied.shapes.map((s) => s.bbox))}`,
+);
+assert.ok(clipApplied.images.length === 0);
+
 // ---------- 隐藏文本层（Skia/Chrome 导出的常见形态）----------
 const hidden = await extractPage(await openPage("tmp/sample-hidden.pdf", 1), { precision: 3 });
 const h = hidden.text.find((t) => t.text === "Hidden Label");
@@ -108,6 +147,12 @@ assert.match(title.color ?? "", /^#[0-9a-f]{6}$/, `demo1 标题应给出可用�
 const demo1Avatars = demo1.images.filter((i) => i.pattern);
 assert.equal(demo1Avatars.length, 1, `demo1 应抽到 1 张图案位图（头像），实际 ${demo1Avatars.length}`);
 assert.deepEqual(demo1Avatars[0].bbox, [24, 668, 56, 700], `demo1 头像位图外框错误: ${JSON.stringify(demo1Avatars[0].bbox)}`);
+
+// 裁剪区（clip）默认不返回（它们不可见，只约束可见范围），需要时用 includeClip 打开
+assert.ok(!demo1.shapes.some((s) => s.paint === "clip"), "默认不应返回裁剪区图形");
+const demo1WithClip = await extractPage(await openPage("pdfs/demo1.pdf", 1), { precision: 2, includeClip: true });
+assert.ok(demo1WithClip.shapes.some((s) => s.paint === "clip"), "includeClip: true 时应返回裁剪区图形");
+assert.ok(demo1WithClip.shapes.length > demo1.shapes.length, "打开 includeClip 后图形数应增加");
 
 // demo3 的 5 个会话头像同样走图案填充，且图案锚在表单 XObject 的坐标系上
 const demo3 = await extractPage(await openPage("pdfs/demo3.pdf", 1), { precision: 2 });

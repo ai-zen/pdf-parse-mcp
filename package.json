@@ -1,6 +1,6 @@
 {
   "name": "@ai-zen/pdf-parse-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server (stdio) that extracts precise text and vector-graphics geometry from PDFs and renders pages to images — built to help agents reconstruct designs from PDF files.",
   "type": "module",
   "main": "dist/index.js",
@@ -19,6 +19,7 @@
     "dist",
     "README.md",
     "README.zh-CN.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

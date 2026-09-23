@@ -71,12 +71,14 @@ npx -y @ai-zen/pdf-parse-mcp
 | `path` | PDF 路径（必需） |
 | `page` | 页码，从 1 开始（必需） |
 | `include` | 只返回 `["text"｜"shapes"｜"images"]` 的子集，默认全返回 |
-| `detail` | `full`（默认，含完整路径线段）或 `box`（只给外框+样式，输出小很多） |
+| `detail` | `box`（默认，只给外框+样式，输出很小）或 `full`（含完整路径线段 M/L/C/Q/Z）。⚠️ `full` **除非你知道自己在做什么，否则别开**：demo1 一页 66 条图形就有 8078 段、shapes JSON 从 6.5 KB 涨到 550 KB，很容易挤爆上下文；真要重画某个图形，先配 `region` 把范围缩到那一块 |
 | `precision` | 坐标保留小数位，默认 3 |
+| `includeClip` | 是否返回裁剪区图形（`paint: "clip"`），默认 `false` |
+| `region` | 只抽取与该矩形相交的元素 `[x0,y0,x1,y1]`（pt，左上原点），默认不限制 |
 | `limit` | 每类条数上限，默认 5000（超出会在 `truncated` 里标记） |
 | `password` | 加密文档的打开密码 |
 
-返回结构（截断示意）：
+返回结构（截断示意，下面 `shapes` 展示的是 `detail:"full"` 的样子）：
 
 ```jsonc
 {
@@ -141,7 +143,10 @@ npx -y @ai-zen/pdf-parse-mcp
 - 曲线段保留控制点（`C` = 三次贝塞尔，`Q` = 二次），`bbox` 取的是整条路径的紧致外框。
 - 描边颜色为 `null` 表示是图案/渐变描边；`paint: "shading"` 表示这里原本是渐变填充（渐变本身的渲染请用 `pdf_render`）。
 - 文本颜色是「按绘制顺序就近匹配」得到的；**拿不到就宁可不给**，不会瞎编。
-- `paint: "clip"` 是没有被绘制的裁剪区（只影响可见范围），不是可见图形。
+- 裁剪区（`paint: "clip"`）默认**不返回**：它们没有被绘制，只影响可见范围；需要就传 `includeClip: true`。
+- `region` 只做**过滤**：外框与它相交的元素原样返回，几何**不被裁**，坐标依旧是整页坐标系（方便跟 `pdf_render` 的 `region` 放大镜对齐）。
+- 图形默认只给外框与样式（`detail: "box"`）：一条图形的完整路径常有几百段，对「看版面」是噪声。
+  ⚠️ `detail: "full"` **除非你知道自己在做什么，否则别用** —— 它是给「要照着把图形重画一遍」的场景准备的，体积能涨几十倍（demo1：66 条图形 8078 段 / 550 KB）；真要取几何，先 `region` 圈出那一块再 `full`。
 - 位图带了 `"pattern": true`，说明它来自**平铺图案（TilingPattern）**的图案单元
   —— 就是「拿一张图当填充」那种做法（Skia/Chrome 导出很常见）。图案单元会按 `XStep/YStep`
   在页面上平铺，这里只给图案单元**这一份**里可见的那部分外框，不代表整片平铺范围。
@@ -173,7 +178,7 @@ npx -y @ai-zen/pdf-parse-mcp
 4. pdf_render(page, scale:1)     → 整页缩略图，核对布局
 5. pdf_render(page, region:[x0,y0,x1,y1], scale:4)
                                  → 局部放大，核对细节与对齐
-6. 用 1~5 的数据把设计稿重建出来，再渲染比对
+6. 用 1~5 的数据把设计稿重建出来，再渲染比对（要精确复刻某个图形时，对那一页补一次 `detail:"full"` 取它的路径线段）
 ```
 
 ## 叠加调试图（人眼核对）
@@ -205,7 +210,7 @@ import { renderOverlay } from "@ai-zen/pdf-parse-mcp";
 const { buffer, counts } = await renderOverlay(page, { scale: 2 });
 ```
 
-用来回归很方便：改完抽取逻辑，跑一遍真实案例的叠加图，一眼就能看出有没有偏、有没有漏。
+叠加图是调试视图，会显式打开 `includeClip`，把裁剪区也画出来（灰色虚线）。用它回归很方便：改完抽取逻辑，跑一遍真实案例的叠加图，一眼就能看出有没有偏、有没有漏。
 
 ## 编程用法
 
@@ -218,6 +223,8 @@ const page = await openPage("design.pdf", 1);
 const content = await extractPage(page, { precision: 2 });
 const png = await renderPage(page, { scale: 2, region: [0, 0, 300, 300] });
 ```
+
+`extractPage` 还接受三个可选开关（语义与 MCP 工具一致）：`includeClip`（把裁剪区也当图形返回，默认 false）、`region`（只取一块，过滤不裁剪）、`applyClip`（默认 false：丢掉「外框与当前裁剪区完全不相交」的元素）。`applyClip` 只做保守判断，**永远不会给出裁剪后的几何**；实测在 Skia 导出的真实稿上常常一条都命中不了，别指望它清理可见性。
 
 文档会按「路径 + 修改时间」缓存复用，`closeAllDocuments()` 可主动释放。
 

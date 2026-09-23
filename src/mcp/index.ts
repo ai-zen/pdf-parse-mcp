@@ -23,7 +23,7 @@ export { closeAllDocuments } from "../core/document.js";
 export { extractPage } from "../core/extract.js";
 export { renderPage } from "../core/render.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const COORD_NOTE = "坐标：左上原点、y 向下、单位 pt（1pt=1/72 英寸）。";
 
@@ -110,30 +110,50 @@ export async function serveMCP(): Promise<void> {
     "pdf_extract",
     `抽取 PDF 某一页的全部内容，用于从 PDF 精确还原设计稿：\n` +
       `- text：文本片段（字符串、基线坐标 x/y、宽高、字号、旋转角、颜色、外框 bbox）\n` +
-      `- shapes：矢量图形（填充/描边色、透明度、线宽、外框 bbox、以及子路径几何：M/L/C/Q/Z 线段；paint="clip" 是不可见的裁剪区）\n` +
+      `- shapes：矢量图形（填充/描边色、透明度、线宽、外框 bbox；默认只给外框，detail="full" 才附子路径几何 M/L/C/Q/Z）\n` +
       `- images：位图贴图（外框 bbox、原始像素尺寸、对象名）\n` +
-      `${COORD_NOTE} 注意：Chrome/Skia 导出的 PDF 常把可见文字画成矢量轮廓，另垫一层不可见的文本对象；` +
+      `${COORD_NOTE} 默认不返回裁剪区（shapes 里的 paint="clip"）—— 它没有被绘制，只约束可见范围；需要时置 includeClip=true。\n` +
+      `region 可只抽取一块区域（与外框相交的元素，不裁几何，坐标仍是整页坐标系）。\n` +
+      `⚠️ detail：默认 "box"（只给外框+样式）就够了；只有当你确实要重画某个图形时才传 "full" —— 一页图形可达数千段、JSON 涨几十倍，很容易把你的上下文洗掉。\n` +
+      `注意：Chrome/Skia 导出的 PDF 常把可见文字画成矢量轮廓，另垫一层不可见的文本对象；` +
       `这类文本会被标 "covered":true，颜色则由同位置的轮廓反推并标 "colorFrom":"outline"。\n` +
       `建议先整体抽取一次看清结构，图形很多时用 detail="box" 只取外框与样式，再对重点区域用 pdf_extract + pdf_render 局部细看。`,
     {
       path: pathField,
       page: z.number().int().positive().describe("页码，从 1 开始"),
+      region: z
+        .array(z.number())
+        .length(4)
+        .optional()
+        .describe("只抽取与该矩形相交的元素 [x0,y0,x1,y1]（pt，左上原点）；是过滤不是裁剪，几何保持整页坐标系"),
       include: z
         .array(z.enum(["text", "shapes", "images"]))
         .optional()
         .describe("只返回指定类别，默认全部"),
       detail: z
-        .enum(["full", "box"])
+        .enum(["box", "full"])
         .optional()
-        .describe('图形细节级别：full（默认）含完整路径线段；box 只给外框+样式，输出更小'),
+        .describe(
+          '图形细节级别：box（默认，只给外框+样式，输出很小）。' +
+            'full：含完整路径线段（M/L/C/Q/Z）。⚠️ 除非你知道自己在做什么，否则别用 full —— 一页 66 条图形就有 8078 段、JSON 550KB，会挤爆上下文；' +
+            '真的要重画某个图形时，先用 region 把范围缩到那一块再传 full。',
+        ),
       precision: z.number().int().min(0).max(6).optional().describe("坐标保留小数位，默认 3"),
+      includeClip: z
+        .boolean()
+        .optional()
+        .describe('是否把裁剪区（paint="clip"）也算作图形返回，默认 false：裁剪区不可见，只约束可见范围'),
       limit: z.number().int().positive().optional().describe("每类结果条数上限，默认 5000"),
       password: passwordField,
     },
-    async ({ path: file, page: pageNumber, include, detail, precision, limit, password }) => {
+    async ({ path: file, page: pageNumber, include, detail, precision, includeClip, region, limit, password }) => {
       try {
         const doc = await openDocument(file, password);
-        const content = await extractPage(await getPageChecked(doc, pageNumber), { precision });
+        const content = await extractPage(await getPageChecked(doc, pageNumber), {
+          precision,
+          includeClip,
+          region: region as [number, number, number, number] | undefined,
+        });
         const wanted: Include[] = include?.length ? include : ["text", "shapes", "images"];
         const max = limit ?? 5000;
 
@@ -153,7 +173,9 @@ export async function serveMCP(): Promise<void> {
           if (content.text.length > max) truncated.text = true;
         }
         if (wanted.includes("shapes")) {
-          const list = detail === "box" ? content.shapes.map(shapeBoxOnly) : content.shapes;
+          // 默认 box：路径线段对「看版面」的 Agent 基本是噪声（demo1 一页 66 条图形、8078 段，JSON 552KB → 6.5KB），
+          // 要重画某个图形时再显式 detail="full"
+          const list = detail === "full" ? content.shapes : content.shapes.map(shapeBoxOnly);
           payload.shapes = list.slice(0, max);
           if (list.length > max) truncated.shapes = true;
         }

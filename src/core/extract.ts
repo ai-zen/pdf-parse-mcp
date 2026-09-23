@@ -120,6 +120,11 @@ interface State {
   stroke: string | null;
   fillAlpha: number;
   strokeAlpha: number;
+  /**
+   * 当前生效裁剪区的外框上界（设备空间，多层裁剪取交集）。
+   * 只用来做「外框与它无交集 ⇒ 整块不可见」这一种保守判断。
+   */
+  clipBox: BBox | null;
 }
 
 type UserSubPath = { closed: boolean; segments: PathSegment[] };
@@ -241,6 +246,8 @@ interface RawRun {
   alpha?: number;
   /** 对应的 operator 序号，用于判断后续是否有图形把它盖住。 */
   seq: number;
+  /** 绘制该文本时生效的裁剪区外框（applyClip 时记录，用于判断文字是不是被裁没了）。 */
+  clipBox?: BBox;
 }
 
 class Interpreter {
@@ -250,6 +257,10 @@ class Interpreter {
   readonly images: ImageItem[] = [];
   readonly runs: RawRun[] = [];
   readonly digits: number;
+  /** 是否把裁剪区也当图形返回（默认 false：裁剪区不可见）。 */
+  readonly includeClip: boolean;
+  /** 是否按裁剪区丢掉完全不可见的元素（默认 false）。 */
+  readonly applyClip: boolean;
 
   private state: State;
   private stack: State[] = [];
@@ -280,8 +291,10 @@ class Interpreter {
   private fontSize = 0;
   private textMode = 0;
 
-  constructor(base: Matrix, digits: number) {
+  constructor(base: Matrix, digits: number, includeClip = false, applyClip = false) {
     this.digits = digits;
+    this.includeClip = includeClip;
+    this.applyClip = applyClip;
     this.baseTransform = base;
     this.state = {
       ctm: base,
@@ -294,6 +307,7 @@ class Interpreter {
       stroke: "#000000",
       fillAlpha: 1,
       strokeAlpha: 1,
+      clipBox: null,
     };
   }
 
@@ -320,6 +334,7 @@ class Interpreter {
     const run: RawRun = { x: pos.x, y: pos.y, fontSize: pos.fontSize, seq: this.opIndex };
     if (color) run.color = color;
     if (alpha !== 1) run.alpha = this.d(alpha);
+    if (this.applyClip && this.state.clipBox) run.clipBox = this.state.clipBox;
     this.runs.push(run);
   }
 
@@ -343,6 +358,12 @@ class Interpreter {
     if (advance) this.tx += this.advance(glyphs);
   }
 
+  /** applyClip 时：外框与当前裁剪区完全不相交 ⇒ 永远看不到，丢掉。 */
+  private clippedOut(box: BBox): boolean {
+    const clip = this.state.clipBox;
+    return this.applyClip && !!clip && !intersectBox(box, clip);
+  }
+
   private emit(paint: PaintKind, minMax: ArrayLike<number> | null, evenOdd: boolean): void {
     const state = this.state;
     if (this.userPath.length === 0) return;
@@ -358,6 +379,18 @@ class Interpreter {
       bbox = expandBox(bbox, (state.lineWidth * scaleOf(state.ctm)) / 2);
     }
     bbox = roundBox(bbox, this.digits);
+
+    if (paint === "clip") {
+      // 裁剪区是图形状态的一部分：之后绘制的元素只有落在它里面才可见（设备空间里层层取交集）
+      state.clipBox = state.clipBox ? intersectBox(state.clipBox, bbox) : bbox;
+      this.userPath = [];
+      // 裁剪区默认不返回：它没有被绘制，只是可见范围的约束（想要就传 includeClip: true）
+      if (!this.includeClip) return;
+    } else if (this.clippedOut(bbox)) {
+      // 整块落在当前裁剪区之外 —— 永远不会显示，直接丢掉
+      this.userPath = [];
+      return;
+    }
 
     const shape: Shape = { paint, bbox, subpaths: mapped.subpaths };
     if (evenOdd) shape.evenOdd = true;
@@ -441,7 +474,7 @@ class Interpreter {
     };
   }
 
-  /** endPath（`n`）：若此前有 clip/eoClip 标记，这条路径就是裁剪区，记下来；否则是纯丢弃的路径，忽略。 */
+  /** endPath（`n`）：若此前有 clip/eoClip 标记，这条路径就是裁剪区（默认丢弃，见 emit）；否则是纯丢弃的路径，忽略。 */
   private consumePendingClip(minMax: ArrayLike<number> | null): void {
     if (this.pendingClip === null) {
       this.userPath = [];
@@ -719,27 +752,27 @@ class Interpreter {
           item.intrinsicWidth = args[1] as number;
           item.intrinsicHeight = args[2] as number;
         }
-        this.images.push(item);
+        if (!this.clippedOut(item.bbox)) this.images.push(item);
         break;
       }
       case OPS.paintInlineImageXObject: {
         const img = args[0] as { width?: number; height?: number };
+        const bbox = this.unitSquareBox();
+        if (this.clippedOut(bbox)) break;
         this.images.push({
           kind: "inline",
           intrinsicWidth: img?.width,
           intrinsicHeight: img?.height,
-          bbox: this.unitSquareBox(),
+          bbox,
         });
         break;
       }
       case OPS.paintInlineImageXObjectGroup:
-      case OPS.paintImageMaskXObjectGroup: {
-        this.images.push({ kind: "mask", bbox: this.unitSquareBox() });
-        break;
-      }
+      case OPS.paintImageMaskXObjectGroup:
       case OPS.paintImageMaskXObject:
       case OPS.paintSolidColorImageMask: {
-        this.images.push({ kind: "mask", bbox: this.unitSquareBox() });
+        const bbox = this.unitSquareBox();
+        if (!this.clippedOut(bbox)) this.images.push({ kind: "mask", bbox });
         break;
       }
 
@@ -901,16 +934,39 @@ function isCovered(bbox: BBox, seq: number, shapes: Shape[], shapeSeq: number[])
 
 export interface ExtractPageOptions {
   precision?: number;
+  /**
+   * 是否把裁剪区（clip/eoClip）也作为一条图形返回，默认 false。
+   * 裁剪区本身没有被绘制，只约束可见范围，对「还原设计稿」通常是噪声。
+   */
+  includeClip?: boolean;
+  /**
+   * 是否用裁剪区丢掉「完全看不到」的元素，默认 false。
+   * 只做「外框与裁剪区无交集 ⇒ 整块不可见」这一种保守判断；
+   * 不会去算裁剪后的精确可见范围（那需要路径布尔运算或栅格化）。
+   */
+  applyClip?: boolean;
+  /**
+   * 只抽取与该矩形相交的元素（[x0,y0,x1,y1]，pt，左上原点）。用于大页面里只看一块。
+   * 这是「过滤」而不是「裁剪」：外框与 region 相交的元素原样返回（几何仍是整页坐标系），
+   * 完全不进 region 的元素会被丢掉。
+   */
+  region?: BBox;
+}
+
+/** 把 [x0,y0,x1,y1] 规整成左上/右下顺序（region 允许乱序给两个对角点）。 */
+function normalizeBox(b: BBox): BBox {
+  return [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])];
 }
 
 /** 抽取一页的全部内容。 */
 export async function extractPage(page: PDFPageProxy, options: ExtractPageOptions = {}): Promise<PageContent> {
   const digits = Math.max(0, Math.min(6, options.precision ?? 3));
+  const region = options.region ? normalizeBox(options.region) : null;
   const viewport = page.getViewport({ scale: 1 });
   const base = viewport.transform as Matrix;
 
   const [opList, textContent] = await Promise.all([page.getOperatorList(), page.getTextContent()]);
-  const interp = new Interpreter(base, digits);
+  const interp = new Interpreter(base, digits, options.includeClip ?? false, options.applyClip ?? false);
   interp.run(opList as unknown as { fnArray: number[]; argsArray: unknown[][] });
 
   // ---- 文本：几何以 getTextContent 为准，颜色用绘图顺序就近匹配 ----
@@ -967,6 +1023,8 @@ export async function extractPage(page: PDFPageProxy, options: ExtractPageOption
       }
       // 允许的误差随字号放宽；超过则视为未匹配（例如文本以 path 形式绘制）
       if (best && bestDist <= Math.max(2, fontSize * 0.5)) {
+        // applyClip：整段文字落在裁剪区外，看不到，丢掉（best.clipBox 只在 applyClip 时记录）
+        if (best.clipBox && !intersectBox(item.bbox, best.clipBox)) continue;
         if (best.color) item.color = best.color;
         if (best.alpha !== undefined) item.alpha = best.alpha;
         runSeq.push(best.seq);
@@ -997,6 +1055,10 @@ export async function extractPage(page: PDFPageProxy, options: ExtractPageOption
     }
   }
 
+  // region：只留外框与它相交的元素（过滤，不动几何）
+  const inRegion = <T extends { bbox: BBox }>(items: T[]): T[] =>
+    region ? items.filter((it) => intersectBox(it.bbox, region) !== null) : items;
+
   return {
     page: page.pageNumber,
     width: roundTo(viewport.width, digits),
@@ -1004,9 +1066,9 @@ export async function extractPage(page: PDFPageProxy, options: ExtractPageOption
     rotation: page.rotate,
     unit: "pt",
     coord: "top-left origin, y down",
-    text,
-    shapes: interp.shapes,
-    images: interp.images,
+    text: inRegion(text),
+    shapes: inRegion(interp.shapes),
+    images: inRegion(interp.images),
     fonts: Object.fromEntries(
       Object.entries(styles).map(([name, s]) => [
         name,

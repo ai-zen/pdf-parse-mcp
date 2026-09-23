@@ -34,8 +34,19 @@ const extractPayload = JSON.parse(extract.content[0].text);
 assert.equal(extractPayload.counts.shapes, 5);
 assert.equal(extractPayload.counts.images, 1);
 assert.ok(extractPayload.text.some((t) => t.text === "Hello World" && t.color === "#000000"));
+assert.deepEqual(extractPayload.shapes[0].subpaths, [], "默认应为 detail=box：不返回路径线段");
 
-// pdf_extract（detail=box 应去掉路径细节）
+// pdf_extract（detail=full 才给路径细节）
+const fullOnly = await client.callTool({
+  name: "pdf_extract",
+  arguments: { path: "tmp/sample.pdf", page: 1, include: ["shapes"], detail: "full" },
+});
+const fullPayload = JSON.parse(fullOnly.content[0].text);
+assert.equal(fullPayload.shapes.length, 5);
+assert.ok(fullPayload.shapes[0].subpaths.length > 0, "detail=full 应返回路径细节");
+assert.equal(fullPayload.text, undefined, "include 只给 shapes 时不应返回文本");
+
+// pdf_extract（detail=box 显式指定同样只给外框）
 const boxOnly = await client.callTool({
   name: "pdf_extract",
   arguments: { path: "tmp/sample.pdf", page: 1, include: ["shapes"], detail: "box" },

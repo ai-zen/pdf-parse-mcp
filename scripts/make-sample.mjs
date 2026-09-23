@@ -5,6 +5,8 @@
 //                          可见文字以矢量轮廓单独画一遍 —— Skia/Chrome 导出的常见形态
 //   tmp/sample-pattern.pdf 平铺图案场景：用一块 40x40 的矩形填充 TilingPattern，
 //                          图案单元里贴一张位图 —— Skia/Chrome 导出的「位图填充图形」常见形态
+//   tmp/sample-clip.pdf    裁剪区场景：左下 120x120 的裁剪窗口，三个矩形分别完全在窗外/内、只相交一部分
+//                          —— 用来验证 applyClip 只丢「外框与裁剪区完全不相交」的元素
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -92,6 +94,21 @@ const PATTERN_CELL = `q
 Q
 `;
 
+// 裁剪区：用户空间左下 120x120（左上原点换算后是 x 0..120, y 672..792）。
+// 三个矩形：红 = 完全在裁剪区外（240,152)-(280,192)、绿 = 完全在内 (10,722)-(70,782)、
+// 蓝 = 只相交一部分 (100,592)-(200,692)。
+const CLIP_CONTENT = `0 0 120 120 re W n
+1 0 0 rg
+240 600 40 40 re
+f
+0.1 0.6 0.2 rg
+10 10 60 60 re
+f
+0.2 0.3 0.9 rg
+100 100 100 100 re
+f
+`;
+
 function imageXObject() {
   return (
     "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB " +
@@ -154,3 +171,4 @@ const base = process.env.PDF_SAMPLE_DIR || "tmp";
 write(`${base}/sample.pdf`, buildPdf(MAIN_CONTENT, { image: true }));
 write(`${base}/sample-hidden.pdf`, buildPdf(HIDDEN_CONTENT));
 write(`${base}/sample-pattern.pdf`, buildPdf(PATTERN_CONTENT, { pattern: true }));
+write(`${base}/sample-clip.pdf`, buildPdf(CLIP_CONTENT));

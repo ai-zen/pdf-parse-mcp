@@ -31,6 +31,10 @@ export interface OverlayOptions {
   lineWidth?: number;
   /** 与 renderPage 一致：像素总量上限。 */
   maxPixels?: number;
+  /** 按裁剪区丢掉「完全看不到」的元素（调试用，默认关）。 */
+  applyClip?: boolean;
+  /** 是否把裁剪区（paint="clip"）也画出来；叠加图默认画，置 false 就跟 pdf_extract 默认一致。 */
+  includeClip?: boolean;
 }
 
 export interface OverlayResult {
@@ -152,7 +156,12 @@ export async function renderOverlay(page: PDFPageProxy, options: OverlayOptions 
     ctx.fillRect(0, 0, rendered.width, rendered.height);
   }
 
-  const content = await extractPage(page, { precision: 2 });
+  // 叠加图是调试视图：裁剪区也照样画出来（灰色虚线），所以这里显式打开
+  const content = await extractPage(page, {
+    precision: 2,
+    includeClip: options.includeClip !== false,
+    applyClip: options.applyClip === true,
+  });
   const region = options.region;
   const ox = region ? Math.min(region[0], region[2]) : 0;
   const oy = region ? Math.min(region[1], region[3]) : 0;

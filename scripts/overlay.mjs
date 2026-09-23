@@ -13,6 +13,8 @@
 //                         可选: render,shapes,shapeBoxes,text,labels,images,legend
 //   --line <n>            叠加线宽（像素），默认 1
 //   --region x0,y0,x1,y1  只画局部（pt，左上原点）
+//   --apply-clip          按裁剪区丢掉完全不可见的元素（默认关），用来核对 applyClip 的效果
+//   --no-clip             不画裁剪区（跟 pdf_extract 默认行为一致）
 //   -h, --help
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -33,11 +35,13 @@ const HELP = `叠加调试图生成器 —— 把渲染结果、文本外框、�
                         可选: ${OVERLAY_LAYERS.join(",")}
   --line <n>            叠加线宽（像素），默认 1
   --region x0,y0,x1,y1  只画局部（pt，左上原点）
+  --apply-clip          按裁剪区丢掉完全不可见的元素（默认关）
+  --no-clip             不画裁剪区（跟 pdf_extract 默认行为一致）
   -h, --help
 `;
 
 function parseArgs(argv) {
-  const opts = { files: [], page: "1", scale: 2, out: "tmp/overlay", layers: undefined, line: 1, region: undefined };
+  const opts = { files: [], page: "1", scale: 2, out: "tmp/overlay", layers: undefined, line: 1, region: undefined, applyClip: false, includeClip: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -49,6 +53,8 @@ function parseArgs(argv) {
     else if (a === "--out") opts.out = next();
     else if (a === "--line") opts.line = Number(next());
     else if (a === "--layers") opts.layers = next().split(",").map((s) => s.trim()).filter(Boolean);
+    else if (a === "--apply-clip") opts.applyClip = true;
+    else if (a === "--no-clip") opts.includeClip = false;
     else if (a === "--region") {
       const parts = next().split(",").map(Number);
       if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
@@ -94,6 +100,8 @@ for (const file of opts.files) {
       region: opts.region,
       layers: opts.layers,
       lineWidth: opts.line,
+      applyClip: opts.applyClip,
+      includeClip: opts.includeClip,
     });
     const stem = path.basename(file).replace(/\.pdf$/i, "");
     const target = path.join(opts.out, `${stem}-p${pageNumber}-overlay.png`);

@@ -71,12 +71,14 @@ Parameters:
 | `path` | PDF path (required) |
 | `page` | Page number, 1-based (required) |
 | `include` | Return only a subset of `["text"｜"shapes"｜"images"]`; all by default |
-| `detail` | `full` (default, with complete path segments) or `box` (boxes + styles only, much smaller output) |
+| `detail` | `box` (default, boxes + styles only, tiny output) or `full` (with complete path segments M/L/C/Q/Z). ⚠️ **Don't turn on `full` unless you know what you're doing**: one demo page with 66 shapes carries 8,078 segments, inflating the shapes JSON from 6.5 KB to 550 KB — it will blow up your context. If you really need to redraw a shape, narrow it down with `region` first |
 | `precision` | Decimal places for coordinates, default 3 |
+| `includeClip` | Also return clip-region shapes (`paint: "clip"`), default `false` |
+| `region` | Only extract items intersecting this rect `[x0,y0,x1,y1]` (pt, top-left origin); no limit by default |
 | `limit` | Max items per category, default 5000 (exceeding it is flagged in `truncated`) |
 | `password` | Password for encrypted documents |
 
-Return shape (truncated):
+Return shape (truncated; the `shapes` entries below show what `detail:"full"` gives):
 
 ```jsonc
 {
@@ -141,7 +143,10 @@ A few conventions:
 - Curve segments keep their control points (`C` = cubic Bézier, `Q` = quadratic); `bbox` is the tight box of the whole path.
 - A `null` stroke color means a pattern/gradient stroke; `paint: "shading"` means the region was originally a gradient fill (render gradients with `pdf_render`).
 - Text color is recovered by nearest-in-paint-order matching; **if it can't be determined we omit it** rather than inventing one.
-- `paint: "clip"` is a clip region that was never painted (it only constrains visibility), not visible artwork.
+- Clip regions (`paint: "clip"`) are **omitted by default**: they are never painted, they only constrain visibility; pass `includeClip: true` to get them.
+- `region` **filters only**: items whose box intersects it are returned unchanged, geometry is **not clipped**, and coordinates stay in page space (so they line up with `pdf_render`'s `region` magnifier).
+- Shapes give boxes and styles by default (`detail: "box"`): a full path often runs to hundreds of segments, which is noise when you only need the layout.
+  ⚠️ **Don't use `detail: "full"` unless you know what you're doing** — it exists for "redraw this shape exactly" work and can multiply the payload by tens (demo1: 66 shapes, 8,078 segments, 550 KB). If you need the geometry, scope it with `region` first.
 - A bitmap tagged `"pattern": true` comes from a **tiling pattern (TilingPattern)** cell — the "use an image as fill" trick (very common in Skia/Chrome exports). The cell is tiled across the page by `XStep/YStep`; we report only the visible part of **that one cell**, not the full tiled extent.
 
 ### `pdf_render`
@@ -171,7 +176,7 @@ Rasterize a single page to an image.
 4. pdf_render(page, scale:1)     → full-page thumbnail to verify layout
 5. pdf_render(page, region:[x0,y0,x1,y1], scale:4)
                                  → zoom in on a detail to verify alignment
-6. rebuild the design from 1–5, then render and compare
+6. rebuild the design from 1–5, then render and compare (to replicate a shape exactly, re-extract that page with `detail:"full"` for its path segments)
 ```
 
 ## Overlay debug images (visual check)
@@ -203,7 +208,7 @@ import { renderOverlay } from "@ai-zen/pdf-parse-mcp";
 const { buffer, counts } = await renderOverlay(page, { scale: 2 });
 ```
 
-Great for regression: after changing extraction logic, run the overlay on real documents and any drift or missed item is obvious at a glance.
+The overlay is a debug view: it turns `includeClip` on, so clip regions are drawn as well (gray dashed). Great for regression: after changing extraction logic, run the overlay on real documents and any drift or missed item is obvious at a glance.
 
 ## Programmatic usage
 
@@ -216,6 +221,8 @@ const page = await openPage("design.pdf", 1);
 const content = await extractPage(page, { precision: 2 });
 const png = await renderPage(page, { scale: 2, region: [0, 0, 300, 300] });
 ```
+
+`extractPage` also takes three optional switches (same semantics as the MCP tool): `includeClip` (also return clip regions as shapes, off by default), `region` (keep a single area — it filters, it does not clip) and `applyClip` (off by default: drop items whose box does not intersect the active clip region at all). `applyClip` is deliberately conservative and **never returns clipped geometry**; on real Skia exports it often drops nothing at all, so don't count on it for visibility cleanup.
 
 Documents are cached and reused by "path + mtime"; call `closeAllDocuments()` to release them.
 
