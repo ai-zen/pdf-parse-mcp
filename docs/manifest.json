@@ -1,0 +1,34 @@
+{
+  "name": "pdf-parse-mcp",
+  "npm": "@ai-zen/pdf-parse-mcp",
+  "description": {
+    "zh": "把 PDF 精确拆解给 Agent 的 MCP 服务器：给出文本、矢量图形、位图的坐标与尺寸，并支持按需栅格渲染。",
+    "en": "An MCP server that takes PDFs apart precisely for agents: coordinates and sizes for text, vector shapes and bitmaps, plus on-demand raster rendering."
+  },
+  "version": "0.2.0",
+  "docsRoot": "docs",
+  "locales": ["zh", "en"],
+  "defaultLocale": "zh",
+  "entry": {
+    "zh": "zh/index.md",
+    "en": "en/index.md"
+  },
+  "sections": {
+    "zh": [
+      { "title": "快速开始", "path": "zh/getting-started.md" },
+      { "title": "MCP 工具", "path": "zh/tools.md" },
+      { "title": "核心概念", "path": "zh/concepts.md" },
+      { "title": "API 参考", "path": "zh/api/index.md" },
+      { "title": "从 PDF 还原设计稿", "path": "zh/guides/reconstruct-design.md" },
+      { "title": "叠加调试图", "path": "zh/guides/overlay.md" }
+    ],
+    "en": [
+      { "title": "Getting Started", "path": "en/getting-started.md" },
+      { "title": "MCP Tools", "path": "en/tools.md" },
+      { "title": "Core Concepts", "path": "en/concepts.md" },
+      { "title": "API Reference", "path": "en/api/index.md" },
+      { "title": "Reconstructing a Design from a PDF", "path": "en/guides/reconstruct-design.md" },
+      { "title": "Overlay Debug Images", "path": "en/guides/overlay.md" }
+    ]
+  }
+}
